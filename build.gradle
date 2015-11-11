@@ -13,7 +13,7 @@ configurations {
     provided
 }
 
-version = "0.1.1"
+version = "0.1.2"
 
 sourceCompatibility = 1.7
 targetCompatibility = 1.7
@@ -23,7 +23,9 @@ dependencies {
     provided "org.embulk:embulk-core:0.7.5"
     // compile "YOUR_JAR_DEPENDENCY_GROUP:YOUR_JAR_DEPENDENCY_MODULE:YOUR_JAR_DEPENDENCY_VERSION"
     compile group: 'org.apache.poi', name : 'poi', version: '3.13'
-    compile group: 'org.apache.poi', name : 'poi-ooxml', version: '3.13'
+    compile(group: 'org.apache.poi', name : 'poi-ooxml', version: '3.13') {
+        exclude group: 'stax', module: 'stax-api'
+    }
     testCompile "junit:junit:4.+"
 }
 
