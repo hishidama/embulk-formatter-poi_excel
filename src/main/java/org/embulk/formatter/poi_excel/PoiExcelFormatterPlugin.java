@@ -3,12 +3,14 @@ package org.embulk.formatter.poi_excel;
 import java.io.IOException;
 import java.text.MessageFormat;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.SpreadsheetVersion;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.apache.poi.xssf.streaming.SXSSFSheet;
+import org.apache.poi.xssf.streaming.SXSSFWorkbook;
 import org.embulk.config.Config;
 import org.embulk.config.ConfigDefault;
 import org.embulk.config.ConfigInject;
@@ -27,10 +29,13 @@ import org.embulk.spi.time.TimestampFormatter;
 import org.embulk.spi.time.TimestampFormatter.TimestampColumnOption;
 import org.embulk.spi.util.FileOutputOutputStream;
 import org.embulk.spi.util.FileOutputOutputStream.CloseMode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Optional;
 
 public class PoiExcelFormatterPlugin implements FormatterPlugin {
+        private static final Logger logger = LoggerFactory.getLogger(PoiExcelFormatterPlugin.class);
 	public interface PluginTask extends Task, TimestampFormatter.Task {
 		@Config("spread_sheet_version")
 		@ConfigDefault("\"EXCEL2007\"")
@@ -58,7 +63,7 @@ public class PoiExcelFormatterPlugin implements FormatterPlugin {
 	@Override
 	public void transaction(ConfigSource config, Schema schema, FormatterPlugin.Control control) {
 		PluginTask task = config.loadConfig(PluginTask.class);
-
+                logger.info("Schemas:\n {}" , schema);
 		control.run(task.dump());
 	}
 
@@ -69,25 +74,29 @@ public class PoiExcelFormatterPlugin implements FormatterPlugin {
 		final Sheet sheet = newWorkbook(task);
 
 		final FileOutputOutputStream stream = new FileOutputOutputStream(output, task.getBufferAllocator(),
-				CloseMode.CLOSE);
+				CloseMode.FLUSH_FINISH_CLOSE);
 		stream.nextFile();
 
 		return new PageOutput() {
 			private final PageReader pageReader = new PageReader(schema);
-
+			private AtomicInteger rowCount = new AtomicInteger(0);
+			private final PoiExcelColumnVisitor visitor = new PoiExcelColumnVisitor(task, schema, sheet, pageReader);
+			
 			@Override
 			public void add(Page page) {
-				pageReader.setPage(page);
-				PoiExcelColumnVisitor visitor = new PoiExcelColumnVisitor(task, schema, sheet, pageReader);
-				while (pageReader.nextRecord()) {
+			        pageReader.setPage(page);
+				while (pageReader.nextRecord()) { 
 					schema.visitColumns(visitor);
 					visitor.endRecord();
+					rowCount.incrementAndGet();
 				}
+				logger.info("Total wrote {} rows.", rowCount.get()); 
 			}
 
 			@Override
 			public void finish() {
 				Workbook book = sheet.getWorkbook();
+				logger.info("Close workbook {}", book);
 				try (FileOutputOutputStream os = stream) {
 					book.write(os);
 					os.finish();
@@ -113,7 +122,8 @@ public class PoiExcelFormatterPlugin implements FormatterPlugin {
 				book = new HSSFWorkbook();
 				break;
 			case EXCEL2007:
-				book = new XSSFWorkbook();
+				book = new SXSSFWorkbook(); //Support mass data, to avoid OutOfMemory error.
+				((SXSSFWorkbook)book).setCompressTempFiles(true);
 				break;
 			default:
 				throw new UnsupportedOperationException(MessageFormat.format("unsupported spread_sheet_version={0}",
@@ -122,6 +132,11 @@ public class PoiExcelFormatterPlugin implements FormatterPlugin {
 		}
 
 		String sheetName = task.getSheetName();
-		return book.createSheet(sheetName);
+		Sheet targetSheet = book.createSheet(sheetName);
+		if(targetSheet instanceof SXSSFSheet) {
+		    ((SXSSFSheet)targetSheet).setRandomAccessWindowSize(100);// keep 100 rows in memory, exceeding rows will be flushed to disk
+		}
+		logger.info("Create sheet '{}' on workbook {} [{}]", sheetName , task.getSpreadsheetVersion(), targetSheet.getClass());
+		return targetSheet;
 	}
 }
