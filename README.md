@@ -6,6 +6,8 @@ This plugin uses Apache POI.
 ## Overview
 
 * **Plugin type**: formatter
+* Embulk 0.9 or earlier (refer to https://github.com/hishidama/embulk-formatter-excel-poi for 0.10 and later)
+
 
 ## Configuration
 
